@@ -42,8 +42,8 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			Mapper<LongWritable, Text, Text, HashMapStringIntWritable> {
 
 		// Reuse objects to save overhead of object creation.
-		private static final Text KEY = new Text();
-		private static final HashMapStringIntWritable STRIPE = new HashMapStringIntWritable();
+		private final Text KEY = new Text();
+		private final HashMapStringIntWritable STRIPE = new HashMapStringIntWritable();
 
 		@Override
 		public void map(LongWritable key, Text value, Context context)
@@ -54,6 +54,29 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			if (words.length > 1) {
+                String prevWord = words[0];
+                for (int i = 1; i < words.length; i++) {
+                    String currWord = words[i];
+                    if (currWord.length() == 0) continue;
+
+                    // 发射常规条纹 <A, {B:1}>
+                    KEY.set(prevWord);
+                    STRIPE.clear();
+                    STRIPE.increment(currWord);
+                    context.write(KEY, STRIPE);
+
+                    // 发射特殊标记 <A, {*:1}> 用于统计左词总次数
+                    KEY.set(prevWord);
+                    STRIPE.clear();
+                    STRIPE.increment("*");
+                    context.write(KEY, STRIPE);
+
+                    prevWord = currWord;
+                }
+            }
+
 		}
 	}
 
@@ -64,9 +87,9 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			Reducer<Text, HashMapStringIntWritable, PairOfStrings, FloatWritable> {
 
 		// Reuse objects.
-		private final static HashMapStringIntWritable SUM_STRIPES = new HashMapStringIntWritable();
-		private final static PairOfStrings BIGRAM = new PairOfStrings();
-		private final static FloatWritable FREQ = new FloatWritable();
+		private final HashMapStringIntWritable SUM_STRIPES = new HashMapStringIntWritable();
+		private final PairOfStrings BIGRAM = new PairOfStrings();
+		private final FloatWritable FREQ = new FloatWritable();
 
 		@Override
 		public void reduce(Text key,
@@ -75,6 +98,43 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			SUM_STRIPES.clear();
+            float total = 0;  // 存储count(A,*)
+            
+            // 合并所有条纹
+            for (HashMapStringIntWritable stripe : stripes) {
+                for (Map.Entry<String, Integer> entry : stripe.entrySet()) {
+                    String rightWord = entry.getKey();
+                    int count = entry.getValue();
+                    
+                    if ("*".equals(rightWord)) {
+                        total += count;  // 累加左词总次数
+                    } else {
+                        // 合并右词计数
+                        SUM_STRIPES.increment(rightWord, count);
+                    }
+                }
+            }
+
+            // 计算并输出相对频率
+            if (total > 0) {
+                for (Map.Entry<String, Integer> entry : SUM_STRIPES.entrySet()) {
+                    String rightWord = entry.getKey();
+                    float count = entry.getValue();
+                    float relativeFreq = count / total;
+                    
+                    BIGRAM.set(key.toString(), rightWord);
+                    FREQ.set(relativeFreq);
+                    context.write(BIGRAM, FREQ);
+                }
+                
+                // 输出左词总次数 (根据README要求的格式)
+                BIGRAM.set(key.toString(), "");
+                FREQ.set(total);
+                context.write(BIGRAM, FREQ);
+            }
+
 		}
 	}
 
@@ -94,6 +154,18 @@ public class BigramFrequencyStripes extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			SUM_STRIPES.clear();
+            
+            // 合并所有条纹
+            for (HashMapStringIntWritable stripe : stripes) {
+                for (Map.Entry<String, Integer> entry : stripe.entrySet()) {
+                    SUM_STRIPES.increment(entry.getKey(), entry.getValue());
+                }
+            }
+            
+            context.write(key, SUM_STRIPES);
+			
 		}
 	}
 

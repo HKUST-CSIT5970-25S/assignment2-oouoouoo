@@ -41,8 +41,11 @@ public class BigramFrequencyPairs extends Configured implements Tool {
 			Mapper<LongWritable, Text, PairOfStrings, IntWritable> {
 
 		// Reuse objects to save overhead of object creation.
-		private static final IntWritable ONE = new IntWritable(1);
-		private static final PairOfStrings BIGRAM = new PairOfStrings();
+		private final IntWritable ONE = new IntWritable(1);
+		private final PairOfStrings BIGRAM = new PairOfStrings();
+
+		private final PairOfStrings LEFT_WORD = new PairOfStrings(); // 存储左词和特殊标记
+        private final Text ASTERISK = new Text("*");  // 特殊标记符号
 
 		@Override
 		public void map(LongWritable key, Text value, Context context)
@@ -53,6 +56,26 @@ public class BigramFrequencyPairs extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			if (words.length > 1) {
+                String previousWord = words[0];
+                for (int i = 1; i < words.length; i++) {
+                    String currentWord = words[i];
+                    if (currentWord.length() == 0) continue;
+
+                    // Emit the actual bigram
+                    BIGRAM.set(previousWord, currentWord);
+                    context.write(BIGRAM, ONE);
+
+                    // Emit special counter for left word total
+                    LEFT_WORD.set(previousWord, ASTERISK.toString());
+                    context.write(LEFT_WORD, ONE);
+
+                    previousWord = currentWord;
+                }
+            }
+
+
 		}
 	}
 
@@ -63,7 +86,12 @@ public class BigramFrequencyPairs extends Configured implements Tool {
 			Reducer<PairOfStrings, IntWritable, PairOfStrings, FloatWritable> {
 
 		// Reuse objects.
-		private final static FloatWritable VALUE = new FloatWritable();
+		// private final static FloatWritable VALUE = new FloatWritable();
+
+		// 添加相对频率输出变量
+        private final FloatWritable RELATIVE_FREQ = new FloatWritable();
+        // 添加左词总次数变量
+        private float leftWordTotal = 0;
 
 		@Override
 		public void reduce(PairOfStrings key, Iterable<IntWritable> values,
@@ -71,6 +99,28 @@ public class BigramFrequencyPairs extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			// 判断是否是特殊标记记录 <A *, count>
+            if (key.getRightElement().equals("*")) {
+                // 计算左词A的总出现次数
+                int sum = 0;
+                for (IntWritable val : values) {
+                    sum += val.get();
+                }
+                leftWordTotal = sum;  // 保存左词总次数供后续使用
+            } else {
+                // 处理常规二元组 <A B, count>
+                int sum = 0;
+                for (IntWritable val : values) {
+                    sum += val.get();
+                }
+                // 计算相对频率 = 二元组次数 / 左词总次数
+                float relativeFreq = sum / leftWordTotal;
+                RELATIVE_FREQ.set(relativeFreq);
+                // 输出结果 <A B, P(B|A)>
+                context.write(key, RELATIVE_FREQ);
+            }
+
 		}
 	}
 	
@@ -84,6 +134,14 @@ public class BigramFrequencyPairs extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();  // 累加相同键的值
+            }
+            SUM.set(sum);
+            context.write(key, SUM);  // 输出本地聚合结果
+
 		}
 	}
 

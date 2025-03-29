@@ -33,16 +33,27 @@ public class CORStripes extends Configured implements Tool {
 	 */
 	private static class CORMapper1 extends
 			Mapper<LongWritable, Text, Text, IntWritable> {
+		private final static IntWritable ONE = new IntWritable(1);
+        private final Text WORD = new Text();		
+
 		@Override
 		public void map(LongWritable key, Text value, Context context)
 				throws IOException, InterruptedException {
-			HashMap<String, Integer> word_set = new HashMap<String, Integer>();
+			Set<String> wordsInLine = new HashSet<String>();
 			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
 			String clean_doc = value.toString().replaceAll("[^a-z A-Z]", " ");
 			StringTokenizer doc_tokenizer = new StringTokenizer(clean_doc);
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			while (doc_tokenizer.hasMoreTokens()) {
+                String word = doc_tokenizer.nextToken();
+                if (!wordsInLine.contains(word)) {
+                    WORD.set(word);
+                    context.write(WORD, ONE);
+                    wordsInLine.add(word);
+                }
+            }
 		}
 	}
 
@@ -51,11 +62,18 @@ public class CORStripes extends Configured implements Tool {
 	 */
 	private static class CORReducer1 extends
 			Reducer<Text, IntWritable, Text, IntWritable> {
+		private final IntWritable SUM = new IntWritable();
 		@Override
 		public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();
+            }
+            SUM.set(sum);
+            context.write(key, SUM);
 		}
 	}
 
@@ -63,6 +81,9 @@ public class CORStripes extends Configured implements Tool {
 	 * TODO: Write your second-pass Mapper here.
 	 */
 	public static class CORStripesMapper2 extends Mapper<LongWritable, Text, Text, MapWritable> {
+		private final MapWritable stripe = new MapWritable();
+        private final Text KEY = new Text();
+
 		@Override
 		protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 			Set<String> sorted_word_set = new TreeSet<String>();
@@ -75,6 +96,24 @@ public class CORStripes extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			// 生成共现条纹
+            List<String> words = new ArrayList<String>(sorted_word_set);
+            for (int i = 0; i < words.size(); i++) {
+                stripe.clear();
+                String wordA = words.get(i);
+                KEY.set(wordA);
+                
+                for (int j = 0; j < words.size(); j++) {
+                    if (i != j) {
+                        String wordB = words.get(j);
+                        stripe.put(new Text(wordB), new IntWritable(1));
+                    }
+                }
+                
+                if (!stripe.isEmpty()) {
+                    context.write(KEY, stripe);
+                }
+            }
 		}
 	}
 
@@ -83,12 +122,29 @@ public class CORStripes extends Configured implements Tool {
 	 */
 	public static class CORStripesCombiner2 extends Reducer<Text, MapWritable, Text, MapWritable> {
 		static IntWritable ZERO = new IntWritable(0);
+		private final MapWritable combinedStripe = new MapWritable();
 
 		@Override
 		protected void reduce(Text key, Iterable<MapWritable> values, Context context) throws IOException, InterruptedException {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			combinedStripe.clear();
+            
+            for (MapWritable stripe : values) {
+                for (Map.Entry<Writable, Writable> entry : stripe.entrySet()) {
+                    Text word = (Text)entry.getKey();
+                    IntWritable count = (IntWritable)entry.getValue();
+                    
+                    IntWritable current = (IntWritable)combinedStripe.get(word);
+                    if (current == null) {
+                        current = ZERO;
+                    }
+                    combinedStripe.put(word, new IntWritable(current.get() + count.get()));
+                }
+            }
+            
+            context.write(key, combinedStripe);
 		}
 	}
 
@@ -98,6 +154,10 @@ public class CORStripes extends Configured implements Tool {
 	public static class CORStripesReducer2 extends Reducer<Text, MapWritable, PairOfStrings, DoubleWritable> {
 		private static Map<String, Integer> word_total_map = new HashMap<String, Integer>();
 		private static IntWritable ZERO = new IntWritable(0);
+
+
+		private final DoubleWritable COR_VALUE = new DoubleWritable();
+        private final PairOfStrings PAIR = new PairOfStrings();
 
 		/*
 		 * Preload the middle result file.
@@ -142,6 +202,47 @@ public class CORStripes extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+
+			MapWritable combinedStripe = new MapWritable();
+            
+            // 合并所有条纹
+            for (MapWritable stripe : values) {
+                for (Map.Entry<Writable, Writable> entry : stripe.entrySet()) {
+                    Text word = (Text)entry.getKey();
+                    IntWritable count = (IntWritable)entry.getValue();
+                    
+                    IntWritable current = (IntWritable)combinedStripe.get(word);
+                    if (current == null) {
+                        current = ZERO;
+                    }
+                    combinedStripe.put(word, new IntWritable(current.get() + count.get()));
+                }
+            }
+            
+            // 计算相关系数
+            String wordA = key.toString();
+            Integer freqA = word_total_map.get(wordA);
+            if (freqA == null) return;
+            
+            for (Map.Entry<Writable, Writable> entry : combinedStripe.entrySet()) {
+                String wordB = ((Text)entry.getKey()).toString();
+                int coCount = ((IntWritable)entry.getValue()).get();
+                Integer freqB = word_total_map.get(wordB);
+                
+                if (freqB != null) {
+                    double cor = (double)coCount / (freqA * freqB);
+                    COR_VALUE.set(cor);
+                    
+                    // 确保A按字母序小于B
+                    if (wordA.compareTo(wordB) < 0) {
+                        PAIR.set(wordA, wordB);
+                    } else {
+                        PAIR.set(wordB, wordA);
+                    }
+                    context.write(PAIR, COR_VALUE);
+                }
+            }
+
 		}
 	}
 
